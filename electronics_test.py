@@ -9,7 +9,8 @@ import serial
 
 HEADER = '''
 Farmduino test commands
-v1.0
+v1.1
+Press <Enter> at prompts to use (default value)
 '''
 
 if sys.platform.startswith('linux'):
@@ -67,10 +68,27 @@ class FarmduinoTestSuite(object):
             time.sleep(2)
             print('Connected!', end='\n\n')
 
+    def skip(self, title=None):
+        '''Skip test category if requested.'''
+        skip_status = False
+        if title is not None:
+            print('\n{line}\n{title}\n{line}'.format(
+                title=title, line='=' * 35))
+        if self.manual:
+            if title is not None:
+                message = 'Continue?\n'
+            else:
+                message = 'begin test?'
+            skip = raw_input(message)
+            if skip == 's':
+                skip_status = True
+        return skip_status
+
     @time_test
     def write_parameters(self):
         '''Set firmware parameters to values for testing.'''
-        print('{line}\nSET PARAMETERS\n{line}'.format(line='=' * 35))
+        if self.skip('set parameters'.upper()):
+            return
         parameters = {
             '11': 120, '12': 120, '13': 120,  # movement timeout
             '15': 0, '16': 0, '17': 0,  # keep active
@@ -96,12 +114,10 @@ class FarmduinoTestSuite(object):
         if self.abridged:
             parameters = {'101': 1, '102': 1, '103': 1}  # encoders
         for parameter, value in parameters.items():
-            self.send_command('F22 P{} V{}'.format(parameter, value),
-                              skip_wait=True)
+            self.send_command('F22 P{} V{}'.format(parameter, value))
             self.send_command('F21 P{}'.format(parameter),
                               expected='P{} V{}'.format(parameter, value),
-                              test_type='parameters',
-                              skip_wait=True)
+                              test_type='parameters')
 
     def update_test_results(self, result_category, test_category):
         '''Update the test results summary.'''
@@ -127,7 +143,7 @@ class FarmduinoTestSuite(object):
         return marker
 
     def send_command(self, command, expected=None, test_type='misc',
-                     skip_wait=False, delay=0.25):
+                     delay=0.25):
         '''Send a command and print the output.'''
         if expected is not None:  # count as a test
             self.update_test_results('count', test_type)
@@ -146,46 +162,42 @@ class FarmduinoTestSuite(object):
 
         if test_type == 'movement':
             markers = [marker, 'R84']
+            indent = ' ' * 2
         else:
             markers = [marker]
-        for marker in markers:
+            indent = ''
+        for i, marker in enumerate(markers):
+            if test_type == 'movement':
+                if i == 0:
+                    print('Motor:')
+                else:
+                    print('Encoder:')
+
             if out != '':  # received output
-                print('{:11}'.format('RECEIVED:'), end='')
+                print('{}{:11}'.format(indent, 'RECEIVED:'), end='')
                 ret = out.split('\r\n')[::-1]  # sort output (latest first)
                 for line in ret:
                     if marker in line:  # response to command sent
                         print(line)
                         # discard marker and `Q`
                         output = (' ').join(line.split(' ')[1:-1])
-                        print('{:11}'.format('VALUE(S):'), end='')
+                        print('{}{:11}'.format(indent, 'VALUE(S):'), end='')
                         print(output)  # value in response
                         break
 
             if expected is not None:  # record results of test
-                print('{:11}'.format('{:11}{}'.format('EXPECTED:', expected)))
+                print('{}{:11}'.format(
+                    indent,
+                    '{:11}{}'.format('EXPECTED:', expected)))
                 if expected in output:  # sucess
                     result = 'PASS'
                     self.update_test_results('passed', test_type)
                 else:
                     result = 'FAIL'
-                print('{:11}{}'.format('RESULT:', result))
+                print('{}{:11}{}'.format(indent, 'RESULT:', result))
 
         print()
-
-        if self.manual and not skip_wait:
-            self.next()  # prompt user to continue to the next test
-
         return output
-
-    @staticmethod
-    def begin():
-        '''Wait for user to press <Enter>.'''
-        raw_input('Press <Enter> to begin the tests...\n')
-
-    @staticmethod
-    def next():
-        '''Wait for user to press <Enter>.'''
-        raw_input('Press <Enter> to continue to the next test...\n')
 
     def print_results(self):
         '''Print number of passing tests.'''
@@ -210,16 +222,22 @@ class FarmduinoTestSuite(object):
     @time_test
     def test_misc(self):
         '''Misc tests.'''
+        if self.skip(title='Preliminary tests:'.upper()):
+            return
         print('Return firmware version:')
-        self.firmware = self.send_command(
-            'F83', expected='GENESIS.V.01.13.EXPERIMENTAL')
+        if not self.skip():
+            self.firmware = self.send_command(
+                'F83', expected='GENESIS.V.01.13.EXPERIMENTAL')
 
         print('Return current position:')
-        self.send_command('F82', expected='X0 Y0 Z0')
+        if not self.skip():
+            self.send_command('F82', expected='X0 Y0 Z0')
 
     @time_test
     def test_movement(self):
         '''Movement tests.'''
+        if self.skip(title='Movement tests:'.upper()):
+            return
         steps = 200
         axes = ['X', 'Y', 'Z']
         if self.abridged:
@@ -231,6 +249,8 @@ class FarmduinoTestSuite(object):
                 else:
                     text_direction = 'backward'
                 print('Move {} axis {}:'.format(axis, text_direction))
+                if self.skip():
+                    continue
                 test_steps = [0, 0, 0]
                 test_steps[axis_num] = steps * direction
                 self.send_command('G00 X{} Y{} Z{}'.format(*test_steps),
@@ -240,6 +260,14 @@ class FarmduinoTestSuite(object):
     @time_test
     def test_pins(self):
         '''Pin tests.'''
+        def read_pin(pin, value, mode):
+            '''Send a read pin message.'''
+            self.send_command('F42 P{} M{}'.format(pin, mode),
+                              expected='P{} V{}'.format(pin, value),
+                              test_type='pins')
+        if self.skip(title='Pin tests:'.upper()):
+            return
+        mode = 0
         if self.board == 'RAMPS':
             pins = [13, 10, 9, 8]
             if self.abridged:
@@ -253,25 +281,30 @@ class FarmduinoTestSuite(object):
                 else:
                     text_value = 'off'
                 print('Turn pin {} {}:'.format(pin, text_value))
-                self.send_command(
-                    'F41 P{} V{} M0'.format(pin, value), skip_wait=True)
-                self.send_command('F42 P{} M0'.format(pin),
-                                  expected='P{} V{}'.format(pin, value),
-                                  test_type='pins')
-        # Tool verification pin (expecting 5V)
-        pin = 9
-        value = 1
-        print('Read pin {}:'.format(pin))
-        self.send_command('F42 P{} M0'.format(pin),
-                          expected='P{} V{}'.format(pin, value),
-                          test_type='pins')
-        # Soil Sensor pin
-        pin = 5
-        value = 0
-        print('Read pin {}:'.format(pin))
-        self.send_command('F42 P{} M1'.format(pin),
-                          expected='P{} V{}'.format(pin, value),
-                          test_type='pins')
+                if self.skip():
+                    continue
+                self.send_command('F41 P{} V{} M0'.format(pin, value))
+                read_pin(pin, value, mode)
+        # Read-only pins
+        if self.board == 'RAMPS':
+            read_pins = [
+                {'description': 'soil sensor',
+                 'number': 59, 'mode': 1, 'expected_value': 0},
+                {'description': 'tool verification (apply 5V)',
+                 'number': 63, 'mode': 0, 'expected_value': 1}
+                ]
+        else:  # change to Farmduino pin numbers
+            for pin in read_pins:
+                if pin['description'] == 'soil sensor':
+                    pin['number'] = 5
+                if pin['description'] == 'tool verification (apply 5V)':
+                    pin['number'] = 9
+        for pin in read_pins:
+            mode_text = {'0': 'digital', '1': 'analog'}[str(pin['mode'])]
+            print('Read pin {} - {} - {} read mode:'.format(
+                pin['number'], pin['description'], mode_text))
+            if not self.skip():
+                read_pin(pin['number'], pin['expected_value'], pin['mode'])
 
     def select_board(self):
         '''Choose a board to test.'''
@@ -284,21 +317,23 @@ class FarmduinoTestSuite(object):
             self.board = 'RAMPS'
         print('{} selected.'.format(self.board))
 
+    def prompt_for_autorun(self):
+        '''Ask user to run in automated test suite mode.'''
+        response = raw_input('Run tests in manual mode? (True) ').lower()
+        options = ['false', 'no', 'n']
+        if any(option in response for option in options):
+            self.manual = False
+
     def run(self):
         '''Run test suite.'''
         self.select_board()
         self.connect_to_board()
 
-        self.manual = (
-            raw_input('Run tests in manual mode? (True) ')
-            or True)
+        self.prompt_for_autorun()
 
         suite_start_time = time.time()
 
         self.test_results['parameters']['time'] = self.write_parameters()
-
-        if self.manual:
-            self.begin()  # prompt user to begin
 
         self.test_results['misc']['time'] = self.test_misc()
         self.test_results['movement']['time'] = self.test_movement()

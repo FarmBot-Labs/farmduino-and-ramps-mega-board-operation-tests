@@ -441,7 +441,7 @@ class FarmduinoTestSuite(object):
             {'description': 'soil sensor',
              'number': SOIL_PIN, 'mode': 1,
              'expected_value': EXPECTED_SOIL_SENSOR_VALUE},
-            {'description': 'tool verification (apply 5V)',
+            {'description': 'tool verification (connect to ground)',
              'number': TOOL_PIN, 'mode': 0,
              'expected_value': EXPECTED_TOOL_VERIFICATION_PIN_VALUE}
             ]

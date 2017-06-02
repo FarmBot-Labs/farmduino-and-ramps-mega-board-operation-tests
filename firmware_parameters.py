@@ -73,7 +73,7 @@ PARAMETERS = {
     'Invert encoders': [
         {'axis': 'x', 'num': 131, 'value': 0},
         {'axis': 'y', 'num': 132, 'value': 0},
-        {'axis': 'z', 'num': 133, 'value': 1}],
+        {'axis': 'z', 'num': 133, 'value': 0}],
     'Axis length (steps)': [
         {'axis': 'x', 'num': 141, 'value': 0},
         {'axis': 'y', 'num': 142, 'value': 0},
@@ -84,7 +84,7 @@ PARAMETERS = {
         {'axis': 'z', 'num': 147, 'value': 0}],
     'Second x-axis motor': [
         {'axis': 'X2', 'num': 36, 'value': 1},
-        {'axis': 'X2 invert', 'num': 37, 'value': 0}],
+        {'axis': 'X2 invert', 'num': 37, 'value': 1}],
     }
 
 PARAMETER_SEEDS = [
@@ -112,8 +112,9 @@ PARAMETER_SEEDS = [
 PARAMETER_SEEDLINGS = OrderedDict([
     ('Second x-axis motor', [
         {'num': 36, 'axis': 'X2', 'value': 1},
-        {'num': 37, 'axis': 'X2 invert', 'value': 0}])
+        {'num': 37, 'axis': 'X2 invert', 'value': 1}])
     ])
+
 
 class GenerateParameters(object):
     'Generate parameters table.'
@@ -139,8 +140,7 @@ class GenerateParameters(object):
         # Re-order
         self.parameters = OrderedDict(reversed(list(self.parameters.items())))
         # Adjustments
-        self.parameters['Invert encoders'][2]['value'] = 1
-
+        # self.parameters['Invert encoders'][2]['value'] = 1
 
     def print_parameters(self):
         'Print generated parameters table.'

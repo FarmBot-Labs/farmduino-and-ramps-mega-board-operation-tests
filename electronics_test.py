@@ -11,7 +11,7 @@ import firmware_parameters
 HEADER = '''
 FarmBot electronics board test commands
 for Farmduino or RAMPS/MEGA
-v1.3
+v1.4
 
 Press <Enter> at prompts to use (default value)
 '''
@@ -347,6 +347,13 @@ class FarmduinoTestSuite(object):
                 skip_status = True
         return skip_status
 
+    def _restart_connection(self):
+        '''Restart arduino connection to clear position.'''
+        self.connection['serial'].close()
+        self.connection['serial'] = serial.Serial(
+            self.connection['port'], 115200)
+        time.sleep(2)
+
     @time_test
     def write_parameters(self):
         '''Set firmware parameters to values for testing.'''
@@ -400,6 +407,7 @@ class FarmduinoTestSuite(object):
                 self.send_command('G00 X{} Y{} Z{}'.format(*test_steps),
                                   expected='X{} Y{} Z{}'.format(*test_steps),
                                   test_type='movement')
+                self._restart_connection()
 
     @time_test
     def test_pins(self):

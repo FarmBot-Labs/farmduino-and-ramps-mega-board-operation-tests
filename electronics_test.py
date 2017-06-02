@@ -11,7 +11,7 @@ import firmware_parameters
 HEADER = '''
 FarmBot electronics board test commands
 for Farmduino or RAMPS/MEGA
-v1.2
+v1.3
 
 Press <Enter> at prompts to use (default value)
 '''
@@ -30,6 +30,8 @@ elif sys.platform.startswith('darwin'):
     DEFAULT_PORT = '/dev/tty.usbmodem'
 else:
     DEFAULT_PORT = 'COM2'
+
+RESPONSE_TIMEOUT = 4  # seconds
 
 
 def time_elapsed(begin, end):
@@ -52,11 +54,7 @@ class FarmduinoTestSuite(object):
     '''Test suite.'''
 
     def __init__(self):
-        print('{line}{header}{line}'.format(line='=' * 50, header=HEADER))
-        self.port = (
-            raw_input('serial port ({}): '.format(DEFAULT_PORT))
-            or DEFAULT_PORT)
-        self.ser = None
+        self.connection = {'serial': None, 'port': None}
         self.options = {'prompts': True, 'verbose': True}
         self.newline = '\n'
         self.test_results = {
@@ -66,32 +64,59 @@ class FarmduinoTestSuite(object):
             'pins':       {'count': 0, 'passed': 0, 'time': 0},
             'parameters': {'count': 0, 'passed': 0, 'time': 0}
             }
-        self.board = None
-        self.firmware = None
+        self.board_info = {'board': None, 'firmware': None}
+        self.run_mode = None
+        self.copy_stdout = None
+
+    def _get_input(self, prompt_text):
+        '''Prompt user for input.'''
+        input_data = raw_input(prompt_text)
+        self.copy_stdout.append_newline()
+        return input_data
+
+    def select_port(self):
+        '''Select the port of the connected board to test.'''
+        self.connection['port'] = (
+            self._get_input('serial port ({}): '.format(DEFAULT_PORT))
+            or DEFAULT_PORT)
+        self.copy_stdout.append_newline()
 
     def select_board(self):
         '''Choose a board to test.'''
-        selected_board = (
-            raw_input('Board to test? 0 for RAMPS, 1 for Farmduino (1) ')
-            or 1)
-        if int(selected_board) > 0:
-            self.board = 'Farmduino'
-        else:
-            self.board = 'RAMPS'
-        print('{} selected.'.format(self.board))
+        while True:
+            selected_board = (self._get_input(
+                'Board to test? 0 for RAMPS, 1 for Farmduino (1): ') or '1')
+            if selected_board == '0':
+                self.board_info['board'] = 'RAMPS'
+                break
+            elif selected_board == '1':
+                self.board_info['board'] = 'Farmduino'
+                break
+        print('{} selected.'.format(self.board_info['board']))
 
     def connect_to_board(self):
         '''Connect to the board.'''
-        print('Trying to connect to {}...'.format(self.port))
-        try:
-            self.ser = serial.Serial(self.port, 115200)
-        except serial.serialutil.SerialException:
-            print('Serial Error: no connection to {}'.format(self.port))
+        while True:
+            self.select_port()
+            print('Trying to connect to {}...'.format(self.connection['port']))
+            try:
+                self.connection['serial'] = serial.Serial(
+                    self.connection['port'], 115200)
+            except serial.serialutil.SerialException:
+                print('Serial Error: no connection to {}'.format(
+                    self.connection['port']))
+            else:
+                time.sleep(2)
+                print('Connected!', end='\n\n')
+                break
+        # Check for firmware
+        response = ''
+        while self.connection['serial'].in_waiting > 0:
+            response += self.connection['serial'].read()
+        if 'R' not in response:
+            print('\nfirmware error: not detected\n'.upper())
             print('Exiting...')
-            sys.exit()
-        else:
-            time.sleep(2)
-            print('Connected!', end='\n\n')
+            sys.exit(0)
 
     def prompt_for_run_mode(self):
         '''Ask user for desired test suite run mode.'''
@@ -106,7 +131,7 @@ class FarmduinoTestSuite(object):
               '   Prompt: none\n'.format(thin_line='-' * 50))
         options = ['1', '2', '3']
         while True:
-            response = raw_input('> ')
+            response = self._get_input('> ')
             if (any(option in response for option in options)
                     and len(response) == 1):
                 if response == '1':
@@ -122,6 +147,8 @@ class FarmduinoTestSuite(object):
                     self.options['verbose'] = False
                     self.options['prompts'] = False
                 self.set_newline()
+                self.run_mode = response
+                print('Run mode {} selected.'.format(self.run_mode))
                 break
             else:
                 print('Please input 1, 2, or 3.')
@@ -141,11 +168,11 @@ class FarmduinoTestSuite(object):
         if expected is not None:  # count as a test
             self.update_test_results('count', test_type)
         # Clear input buffer
-        self.ser.reset_input_buffer()
+        self.connection['serial'].reset_input_buffer()
         # Send the command
         if self.options['verbose']:
             print('{:11}{}'.format('SENDING:', command_io['command']))
-        self.ser.write(command + '\r\n')
+        self.connection['serial'].write(command + '\r\n')
         # prep for receiving output
         command_io['marker'] = self.get_response_marker(command)
         command_io['out'] = self.get_response()
@@ -194,12 +221,17 @@ class FarmduinoTestSuite(object):
     def get_response(self):
         '''Get command response.'''
         response = ''
-        while True:
-            time.sleep(0.005)
-            while self.ser.in_waiting > 0:
-                response += self.ser.read()
+        clock = 0
+        delay_increment = 0.005
+        while clock < RESPONSE_TIMEOUT:
+            time.sleep(delay_increment)
+            clock += delay_increment
+            while self.connection['serial'].in_waiting > 0:
+                response += self.connection['serial'].read()
             if 'R02' in response or 'R03' in response:
                 break
+        else:
+            print('***  response timeout  ***'.upper())
         return response
 
     @staticmethod
@@ -222,7 +254,9 @@ class FarmduinoTestSuite(object):
         expected = command_io['expected']
         output = command_io['output']
         outcome = False
-        if any(op in expected for op in ['<', '>', '=']):
+        if command_io['output'] is None:
+            outcome = False
+        elif any(op in expected for op in ['<', '>', '=']):
             outcome = self._operator_comparison(expected, output)
         elif all(axis in expected for axis in ['X', 'Y', 'Z']):
             outcome = self._delta_comparison(expected, output)
@@ -308,7 +342,7 @@ class FarmduinoTestSuite(object):
                 message = 'Continue?\n'
             else:
                 message = 'begin test?'
-            skip = raw_input(message)
+            skip = self._get_input(message)
             if skip == 's':
                 skip_status = True
         return skip_status
@@ -338,7 +372,7 @@ class FarmduinoTestSuite(object):
             return
         print('Return firmware version: ', end=self.newline)
         if not self.skip():
-            self.firmware = self.send_command(
+            self.board_info['firmware'] = self.send_command(
                 'F83', expected=EXPECTED_FIRMWARE_VERSION)
 
         print('Return current position: ', end=self.newline)
@@ -378,7 +412,7 @@ class FarmduinoTestSuite(object):
         if self.skip(title='Pin tests:'.upper()):
             return
         mode = 0
-        if self.board == 'RAMPS':
+        if self.board_info['board'] == 'RAMPS':
             pins = RAMPS_PERIPHERAL_PINS
         else:
             pins = FARMDUINO_PERIPHERAL_PINS
@@ -426,9 +460,15 @@ class FarmduinoTestSuite(object):
     def print_results(self):
         '''Print number of passing tests.'''
         print('\n{line}\nTEST RESULTS\n'
-              '{board_title:11}{board}\n{fw_title:11}{fw}\n{line}'.format(
-                  line='=' * 50, board_title='BOARD:', board=self.board,
-                  fw_title='FIRMWARE:', fw=self.firmware))
+              '{board_title:11}{board}\n'
+              '{fw_title:11}{fw}\n'
+              '{date_title:11}{date} UTC\n'
+              '{line}'.format(
+                  line='=' * 50,
+                  board_title='BOARD:', board=self.board_info['board'],
+                  fw_title='FIRMWARE:', fw=self.board_info['firmware'],
+                  date_title='TEST DATE:',
+                  date=time.strftime('%Y-%m-%d %H:%m', time.gmtime())))
         print('{:12}{:8}{:9}{:10}{:12}'.format(
             'CATEGORY', 'PASS', 'COUNT', 'PERCENT', 'TIME (sec)'))
         for cat in ['total', 'misc', 'movement', 'pins', 'parameters']:
@@ -445,6 +485,12 @@ class FarmduinoTestSuite(object):
 
     def run(self):
         '''Run test suite.'''
+        # Begin copying stdout for saving to file
+        sys.stdout = self.copy_stdout = CarbonCopy()
+
+        # Print header
+        print('{line}{header}{line}'.format(line='=' * 50, header=HEADER))
+
         self.select_board()
         self.connect_to_board()
         self.prompt_for_run_mode()
@@ -462,11 +508,43 @@ class FarmduinoTestSuite(object):
 
         self.exit()
 
+        # Save a copy of the output to file
+        self.copy_stdout.save_copy_to_file(
+            '{}_board-test-results.txt'.format(self.board_info['board']))
+
     def exit(self):
         '''Close serial and quit.'''
-        self.ser.close()
-        raw_input('Press <Enter> to exit...\n')
+        self.connection['serial'].close()
+        notes = self._get_input('Press <Enter> to exit...\n')
+        if notes:
+            print('Notes: {}'.format(notes))
+            print()
         print('Exiting...')
+
+
+class CarbonCopy(object):
+    '''Copy STDOUT to string.'''
+    def __init__(self):
+        self.stdout = sys.stdout
+        self.string = ''
+
+    def write(self, text):
+        '''Write to stdout and append a copy to a string.'''
+        self.stdout.write(text)
+        self.string += text
+
+    def flush(self):
+        '''Flush.'''
+        pass
+
+    def append_newline(self):
+        '''Add an extra newline for use after input prompts.'''
+        self.string += '\n'
+
+    def save_copy_to_file(self, filename):
+        '''Save the stdout copy to a file.'''
+        with open(filename, 'w') as copy_file:
+            copy_file.write(self.string)
 
 if __name__ == '__main__':
     FTS = FarmduinoTestSuite()

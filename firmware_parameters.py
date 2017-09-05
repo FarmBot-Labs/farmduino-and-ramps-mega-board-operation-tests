@@ -82,6 +82,10 @@ PARAMETERS = {
         {'axis': 'x', 'num': 145, 'value': 0},
         {'axis': 'y', 'num': 146, 'value': 0},
         {'axis': 'z', 'num': 147, 'value': 0}],
+    'E-STOP on movement error': [
+        {'axis': 'NA', 'num': 4, 'value': 0}],
+    'Movement retries': [
+        {'axis': 'NA', 'num': 5, 'value': 1}],
     'Second x-axis motor': [
         {'axis': 'X2', 'num': 36, 'value': 1},
         {'axis': 'X2 invert', 'num': 37, 'value': 1}],
@@ -112,7 +116,11 @@ PARAMETER_SEEDS = [
 PARAMETER_SEEDLINGS = OrderedDict([
     ('Second x-axis motor', [
         {'num': 36, 'axis': 'X2', 'value': 1},
-        {'num': 37, 'axis': 'X2 invert', 'value': 1}])
+        {'num': 37, 'axis': 'X2 invert', 'value': 1}]),
+    ('Movement retries', [
+        {'num': 5, 'axis': 'NA', 'value': 1}]),
+    ('E-STOP on movement error', [
+        {'num': 4, 'axis': 'NA', 'value': 0}]),
     ])
 
 

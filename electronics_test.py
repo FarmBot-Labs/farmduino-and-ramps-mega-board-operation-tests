@@ -11,12 +11,12 @@ import firmware_parameters
 HEADER = '''
 FarmBot electronics board test commands
 for Farmduino or RAMPS/MEGA
-v1.4
+v1.5
 
 Press <Enter> at prompts to use (default value)
 '''
 
-EXPECTED_FIRMWARE_VERSION = 'GENESIS.V.01.13.EXPERIMENTAL'
+EXPECTED_FIRMWARE_VERSION = '4.0.2'
 RAMPS_PERIPHERAL_PINS = [13, 10, 9, 8]
 FARMDUINO_PERIPHERAL_PINS = [13, 7, 8, 9, 10, 12]
 SOIL_PIN = 59
@@ -31,7 +31,7 @@ elif sys.platform.startswith('darwin'):
 else:
     DEFAULT_PORT = 'COM2'
 
-RESPONSE_TIMEOUT = 4  # seconds
+RESPONSE_TIMEOUT = 6  # seconds
 
 
 def time_elapsed(begin, end):
@@ -160,7 +160,7 @@ class FarmduinoTestSuite(object):
         else:
             self.newline = ''
 
-    def send_command(self, command, expected=None, test_type='misc'):
+    def send_command(self, command, expected=None, test_type='misc', quiet=False):
         '''Send a command and print the output.'''
         command_io = {'command': command, 'marker': None, 'expected': expected,
                       'received': None, 'out': '', 'output': None,
@@ -170,7 +170,7 @@ class FarmduinoTestSuite(object):
         # Clear input buffer
         self.connection['serial'].reset_input_buffer()
         # Send the command
-        if self.options['verbose']:
+        if self.options['verbose'] and not quiet:
             print('{:11}{}'.format('SENDING:', command_io['command']))
         self.connection['serial'].write(command + '\r\n')
         # prep for receiving output
@@ -218,7 +218,7 @@ class FarmduinoTestSuite(object):
             marker = 'R' + command[1:3]
         return marker
 
-    def get_response(self):
+    def get_response(self, idle=False, home=False):
         '''Get command response.'''
         response = ''
         clock = 0
@@ -228,8 +228,19 @@ class FarmduinoTestSuite(object):
             clock += delay_increment
             while self.connection['serial'].in_waiting > 0:
                 response += self.connection['serial'].read()
-            if 'R02' in response or 'R03' in response:
-                break
+            if idle:
+                if 'R00' in response:
+                    # print('idle')
+                    break
+            elif home:
+                if 'R82 X0 Y0 Z0' in response:
+                    # print('home')
+                    break
+            else:
+                if 'R02' in response or 'R03' in response:
+                    # print('got response:')
+                    # print(response)
+                    break
         else:
             print('***  response timeout  ***'.upper())
         return response
@@ -300,7 +311,7 @@ class FarmduinoTestSuite(object):
         move_output_value = output.split(' ')
         for i in range(3):
             expect = int(move_compare_value[i][1:])
-            actual = int(move_output_value[i][1:])
+            actual = int(float(move_output_value[i][1:]))
             difference = abs(actual - expect)
             threshold = 5
             if difference > threshold:
@@ -353,6 +364,20 @@ class FarmduinoTestSuite(object):
         self.connection['serial'] = serial.Serial(
             self.connection['port'], 115200)
         time.sleep(2)
+
+    def _reset_position(self):
+        '''Reset position to home.'''
+        # print('resetting...')
+        self.send_command('F84 X1 Y1 Z1', quiet=True)
+        self._wait_for_home()
+
+    def _wait_for_idle(self):
+        '''Wait for an idle message.'''
+        self.get_response(idle=True)
+
+    def _wait_for_home(self):
+        '''Wait for a home position report.'''
+        self.get_response(home=True)
 
     @time_test
     def write_parameters(self):
@@ -407,7 +432,7 @@ class FarmduinoTestSuite(object):
                 self.send_command('G00 X{} Y{} Z{}'.format(*test_steps),
                                   expected='X{} Y{} Z{}'.format(*test_steps),
                                   test_type='movement')
-                self._restart_connection()
+                self._reset_position()
 
     @time_test
     def test_pins(self):

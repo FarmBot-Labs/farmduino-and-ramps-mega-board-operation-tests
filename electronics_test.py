@@ -11,12 +11,12 @@ import firmware_parameters
 HEADER = '''
 FarmBot electronics board test commands
 for Farmduino or RAMPS/MEGA
-v1.5
+v1.6
 
 Press <Enter> at prompts to use (default value)
 '''
 
-EXPECTED_FIRMWARE_VERSION = '4.0.2'
+EXPECTED_FIRMWARE_VERSION = '6.3.0'
 RAMPS_PERIPHERAL_PINS = [13, 10, 9, 8]
 FARMDUINO_PERIPHERAL_PINS = [13, 7, 8, 9, 10, 12]
 SOIL_PIN = 59
@@ -32,6 +32,7 @@ else:
     DEFAULT_PORT = 'COM2'
 
 RESPONSE_TIMEOUT = 6  # seconds
+PRINT_FIRMWARE_OUTPUT = False  # for debugging
 
 
 def time_elapsed(begin, end):
@@ -50,6 +51,12 @@ def time_test(function):
     return wrapper
 
 
+def display_warning(text):
+    '''Print a warning message.'''
+    print('{icon}  {warning}  {icon}'.format(
+        icon='*' * 3, warning=text.upper()))
+
+
 class FarmduinoTestSuite(object):
     '''Test suite.'''
 
@@ -64,7 +71,8 @@ class FarmduinoTestSuite(object):
             'pins':       {'count': 0, 'passed': 0, 'time': 0},
             'parameters': {'count': 0, 'passed': 0, 'time': 0}
             }
-        self.board_info = {'board': None, 'firmware': None}
+        self.board_info = {
+            'board': None, 'firmware': None, 'expected_versions': None}
         self.run_mode = None
         self.copy_stdout = None
 
@@ -88,9 +96,14 @@ class FarmduinoTestSuite(object):
                 'Board to test? 0 for RAMPS, 1 for Farmduino (1): ') or '1')
             if selected_board == '0':
                 self.board_info['board'] = 'RAMPS'
+                self.board_info['expected_versions'] = [
+                    EXPECTED_FIRMWARE_VERSION + '.R']
                 break
             elif selected_board == '1':
                 self.board_info['board'] = 'Farmduino'
+                self.board_info['expected_versions'] = [
+                    EXPECTED_FIRMWARE_VERSION + '.F',
+                    EXPECTED_FIRMWARE_VERSION + '.G']
                 break
         print('{} selected.'.format(self.board_info['board']))
 
@@ -163,7 +176,7 @@ class FarmduinoTestSuite(object):
     def send_command(self, command, expected=None, test_type='misc', quiet=False):
         '''Send a command and print the output.'''
         command_io = {'command': command, 'marker': None, 'expected': expected,
-                      'received': None, 'out': '', 'output': None,
+                      'received': None, 'R85': None, 'out': '', 'output': None,
                       'result': 'FAIL'}
         if expected is not None:  # count as a test
             self.update_test_results('count', test_type)
@@ -175,7 +188,7 @@ class FarmduinoTestSuite(object):
         self.connection['serial'].write(command + '\r\n')
         # prep for receiving output
         command_io['marker'] = self.get_response_marker(command)
-        command_io['out'] = self.get_response()
+        command_io['out'] = self.get_output()
 
         if test_type == 'movement':
             # Add check of encoder response
@@ -196,7 +209,7 @@ class FarmduinoTestSuite(object):
                     self.update_test_results('count', test_type)
 
             if command_io['out'] != '':  # received output
-                command_io = self.reduce_response(command_io, marker)
+                command_io = self.reduce_output(command_io, marker)
 
             # Determine test outcome and record as PASS/FAIL
             if command_io['expected'] is not None:
@@ -218,8 +231,8 @@ class FarmduinoTestSuite(object):
             marker = 'R' + command[1:3]
         return marker
 
-    def get_response(self, idle=False, home=False):
-        '''Get command response.'''
+    def get_output(self, idle=False, home=False):
+        '''Get command firmware output response.'''
         response = ''
         clock = 0
         delay_increment = 0.005
@@ -233,7 +246,8 @@ class FarmduinoTestSuite(object):
                     # print('idle')
                     break
             elif home:
-                if 'R82 X0 Y0 Z0' in response:
+                if any(zero in response
+                       for zero in ['R82 X0 Y0 Z0', 'R82 X0.00 Y0.00 Z0.00']):
                     # print('home')
                     break
             else:
@@ -242,22 +256,33 @@ class FarmduinoTestSuite(object):
                     # print(response)
                     break
         else:
-            print('***  response timeout  ***'.upper())
+            display_warning('response timeout')
         return response
 
     @staticmethod
-    def reduce_response(command_io, marker):
-        '''Get the correct response and return the value.'''
-        full_response = command_io['out']
-        complete_lines = full_response[:full_response.rfind('\r\n')]
+    def _find_response(fw_output, marker):
+        '''Find the command response in the provided firmware output.'''
+        complete_lines = fw_output[:fw_output.rfind('\r\n')]
         ret = complete_lines.split('\r\n')[::-1]  # sort output (last first)
         for line in ret:
             if marker in line:  # response to command sent
-                command_io['received'] = line
-                # discard marker and `Q`
-                command_io['output'] = (' ').join(
-                    command_io['received'].split(' ')[1:-1])
-                break
+                return line
+        return
+
+    @staticmethod
+    def _reduce_response(response_line):
+        '''Return data from the provided command response line (`R# * Q#`).'''
+        if response_line is None:
+            return
+        return (' ').join(response_line.split(' ')[1:-1])
+
+    def reduce_output(self, command_io, marker):
+        '''Add the response line and response data to the command_io object.'''
+        fw_output = command_io['out']
+        command_io['received'] = self._find_response(fw_output, marker)
+        command_io['output'] = self._reduce_response(command_io['received'])
+        if marker == 'R84':  # include raw and scaled encoder positions
+            command_io['R85'] = self._find_response(fw_output, 'R85')
         return command_io
 
     def compare(self, command_io, test_type):
@@ -271,6 +296,9 @@ class FarmduinoTestSuite(object):
             outcome = self._operator_comparison(expected, output)
         elif all(axis in expected for axis in ['X', 'Y', 'Z']):
             outcome = self._delta_comparison(expected, output)
+        elif command_io['marker'] == 'R83':  # Firmware version report
+            if any(output == v for v in expected):
+                outcome = True
         else:
             if output == expected:
                 outcome = True
@@ -306,6 +334,9 @@ class FarmduinoTestSuite(object):
     @staticmethod
     def _delta_comparison(expected, output):
         '''Compare difference in values (for encoder readings).'''
+        if output is None:
+            display_warning('no output data')
+            return False
         move_outcome = True
         move_compare_value = expected.split(' ')
         move_output_value = output.split(' ')
@@ -327,8 +358,19 @@ class FarmduinoTestSuite(object):
                     print()
                     print('{}{:11}{}'.format(
                         indent, 'SENT:', command_io['command']))
-                print('{}{:11}{}'.format(
-                    indent, 'RECEIVED:', command_io['received']))
+                if PRINT_FIRMWARE_OUTPUT:
+                    cleaned_output = command_io['out'].replace('\r*', '*')
+                    split_output = cleaned_output.split('\r\n')
+                    for i, line in enumerate(split_output):
+                        title = 'OUTPUT:' if i == 0 else ''
+                        end = '' if i == len(split_output) else '\n'
+                        print('{}{:11}{}'.format(indent, title, line), end=end)
+                extra_response = ''
+                if command_io['R85'] is not None:
+                    extra_response += ' ({})'.format(command_io['R85'])
+                print('{}{:11}{}{}'.format(
+                    indent, 'RECEIVED:', command_io['received'],
+                    extra_response))
                 print('{}{:11}{}'.format(
                     indent, 'VALUE(S):', command_io['output']))
                 print('{}{:11}'.format(
@@ -373,11 +415,11 @@ class FarmduinoTestSuite(object):
 
     def _wait_for_idle(self):
         '''Wait for an idle message.'''
-        self.get_response(idle=True)
+        self.get_output(idle=True)
 
     def _wait_for_home(self):
         '''Wait for a home position report.'''
-        self.get_response(home=True)
+        self.get_output(home=True)
 
     @time_test
     def write_parameters(self):
@@ -396,6 +438,8 @@ class FarmduinoTestSuite(object):
                 self.send_command('F21 P{}'.format(parameter),
                                   expected='P{} V{}'.format(parameter, value),
                                   test_type='parameters')
+        self.send_command('F22 P2 V1')  # Validate parameters
+        # self.send_command('F22 P3 V0')  # Don't use EEPROM
 
     @time_test
     def test_misc(self):
@@ -405,7 +449,7 @@ class FarmduinoTestSuite(object):
         print('Return firmware version: ', end=self.newline)
         if not self.skip():
             self.board_info['firmware'] = self.send_command(
-                'F83', expected=EXPECTED_FIRMWARE_VERSION)
+                'F83', expected=self.board_info['expected_versions'])
 
         print('Return current position: ', end=self.newline)
         if not self.skip():

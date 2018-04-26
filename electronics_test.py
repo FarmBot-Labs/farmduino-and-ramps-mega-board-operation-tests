@@ -11,7 +11,7 @@ import firmware_parameters
 HEADER = '''
 FarmBot electronics board test commands
 for Farmduino or RAMPS/MEGA
-v1.6
+v1.7
 
 Press <Enter> at prompts to use (default value)
 '''
@@ -33,6 +33,7 @@ else:
 
 RESPONSE_TIMEOUT = 6  # seconds
 PRINT_FIRMWARE_OUTPUT = False  # for debugging
+USE_STM32_RESET = False  # as position reset method
 
 
 def time_elapsed(begin, end):
@@ -145,6 +146,10 @@ class FarmduinoTestSuite(object):
         options = ['1', '2', '3']
         while True:
             response = self._get_input('> ')
+            if 'P' in response:
+                self._read_position()
+            if 'R' in response:
+                self._encoder_hard_reset()
             if (any(option in response for option in options)
                     and len(response) == 1):
                 if response == '1':
@@ -231,7 +236,7 @@ class FarmduinoTestSuite(object):
             marker = 'R' + command[1:3]
         return marker
 
-    def get_output(self, idle=False, home=False):
+    def get_output(self, idle=False, home=False, position=False):
         '''Get command firmware output response.'''
         response = ''
         clock = 0
@@ -249,6 +254,10 @@ class FarmduinoTestSuite(object):
                 if any(zero in response
                        for zero in ['R82 X0 Y0 Z0', 'R82 X0.00 Y0.00 Z0.00']):
                     # print('home')
+                    break
+            elif position:
+                if 'R81' in response:  # R81 is after R85 to get full R85 output
+                    # print('encoder position report')
                     break
             else:
                 if 'R02' in response or 'R03' in response:
@@ -407,10 +416,34 @@ class FarmduinoTestSuite(object):
             self.connection['port'], 115200)
         time.sleep(2)
 
+    def _encoder_hard_reset(self):
+        '''Reset STM32.'''
+        # print('resetting STM32...')
+        self.send_command('F43 P49 M1', quiet=True)
+        self.send_command('F41 P49 V0', quiet=True)
+        self.send_command('F41 P49 V1', quiet=True)
+
+    def _read_position(self):
+        '''Read and print position.'''
+        fw_out = self.get_output(position=True)
+        resp = self._find_response(fw_out, 'R85')
+        encoder_position = self._reduce_response(resp)
+        print('raw encoder positions: {}'.format(encoder_position))
+
+    def _get_board_code(self):
+        '''Get single-character board designation.'''
+        fw_version = self.board_info['firmware']
+        fw_string = '' if fw_version is None else fw_version
+        fw_char = [char for char in fw_string][-1]
+        return fw_char
+
     def _reset_position(self):
         '''Reset position to home.'''
         # print('resetting...')
-        self.send_command('F84 X1 Y1 Z1', quiet=True)
+        if USE_STM32_RESET and 'G' in self._get_board_code():
+            self._encoder_hard_reset()
+        else:
+            self.send_command('F84 X1 Y1 Z1', quiet=True)
         self._wait_for_home()
 
     def _wait_for_idle(self):
@@ -450,7 +483,8 @@ class FarmduinoTestSuite(object):
         if not self.skip():
             self.board_info['firmware'] = self.send_command(
                 'F83', expected=self.board_info['expected_versions'])
-
+            if USE_STM32_RESET and 'G' in self._get_board_code():
+                self._encoder_hard_reset()
         print('Return current position: ', end=self.newline)
         if not self.skip():
             self.send_command('F82', expected='X0 Y0 Z0')

@@ -12,18 +12,21 @@ import firmware_parameters
 HEADER = '''
 FarmBot electronics board test commands
 for Farmduino or RAMPS/MEGA
-v1.8
+v1.9
 
 Press <Enter> at prompts to use (default value)
 '''
 
-EXPECTED_FIRMWARE_VERSION = '6.3.0'
+EXPECTED_FIRMWARE_VERSION = '6.4.0'
 RAMPS_PERIPHERAL_PINS = [13, 10, 9, 8]
 FARMDUINO_PERIPHERAL_PINS = [13, 7, 8, 9, 10, 12]
 SOIL_PIN = 59
 EXPECTED_SOIL_SENSOR_VALUE = '>1000'
 TOOL_PIN = 63
 EXPECTED_TOOL_VERIFICATION_PIN_VALUE = 1
+
+RAMPS = '0'
+FARMDUINO = '1'
 
 if sys.platform.startswith('linux'):
     DEFAULT_PORT = '/dev/ttyACM0'
@@ -91,17 +94,22 @@ class FarmduinoTestSuite(object):
             or DEFAULT_PORT)
         self.copy_stdout.append_newline()
 
-    def select_board(self):
+    def select_board(self, auto_run):
         '''Choose a board to test.'''
         while True:
-            selected_board = (self._get_input(
-                'Board to test? 0 for RAMPS, 1 for Farmduino (1): ') or '1')
-            if selected_board == '0':
+            if auto_run:
+                selected_board = FARMDUINO
+            else:
+                selected_board = (
+                    self._get_input(
+                        'Board to test? 0 for RAMPS, 1 for Farmduino (1): ')
+                    or FARMDUINO)
+            if selected_board == RAMPS:
                 self.board_info['board'] = 'RAMPS'
                 self.board_info['expected_versions'] = [
                     EXPECTED_FIRMWARE_VERSION + '.R']
                 break
-            elif selected_board == '1':
+            elif selected_board == FARMDUINO:
                 self.board_info['board'] = 'Farmduino'
                 self.board_info['expected_versions'] = [
                     EXPECTED_FIRMWARE_VERSION + '.F',
@@ -111,10 +119,13 @@ class FarmduinoTestSuite(object):
         print('{} selected.'.format(self.board_info['board']))
         sys.stdout.reset_color()
 
-    def connect_to_board(self):
+    def connect_to_board(self, auto_run=False):
         '''Connect to the board.'''
         while True:
-            self.select_port()
+            if auto_run:
+                self.connection['port'] = DEFAULT_PORT
+            else:
+                self.select_port()
             print('Trying to connect to {}...'.format(self.connection['port']))
             try:
                 self.connection['serial'] = serial.Serial(
@@ -137,7 +148,7 @@ class FarmduinoTestSuite(object):
             print('Exiting...')
             sys.exit(0)
 
-    def prompt_for_run_mode(self):
+    def prompt_for_run_mode(self, auto_run=False):
         '''Ask user for desired test suite run mode.'''
         print('Test Suite Run Mode Options\n{thin_line}\n'
               '1: Output: full\n'
@@ -150,7 +161,10 @@ class FarmduinoTestSuite(object):
               '   Prompt: none\n'.format(thin_line='-' * 50))
         options = ['1', '2', '3']
         while True:
-            response = self._get_input('> ')
+            if auto_run:
+                response = '3'
+            else:
+                response = self._get_input('> ')
             if 'P' in response:
                 self._read_position()
             if 'R' in response:
@@ -611,7 +625,7 @@ class FarmduinoTestSuite(object):
                 cat, passed, count, percent, elapsed))
         print('{line}\n'.format(line='=' * 50))
 
-    def run(self):
+    def run(self, auto_run=False):
         '''Run test suite.'''
         # Begin copying stdout for saving to file
         sys.stdout = self.copy_stdout = CarbonCopy()
@@ -619,9 +633,9 @@ class FarmduinoTestSuite(object):
         # Print header
         print('{line}{header}{line}'.format(line='=' * 50, header=HEADER))
 
-        self.select_board()
-        self.connect_to_board()
-        self.prompt_for_run_mode()
+        self.select_board(auto_run)
+        self.connect_to_board(auto_run)
+        self.prompt_for_run_mode(auto_run)
 
         suite_start_time = time.time()
 
@@ -634,16 +648,19 @@ class FarmduinoTestSuite(object):
             suite_start_time, time.time())
         self.print_results()
 
-        self.exit()
+        self.exit(auto_run)
 
         # Save a copy of the output to file
         self.copy_stdout.save_copy_to_file(
             '{}_board-test-results.txt'.format(self.board_info['board']))
 
-    def exit(self):
+    def exit(self, auto_run=False):
         '''Close serial and quit.'''
         self.connection['serial'].close()
-        notes = self._get_input('Press <Enter> to exit...\n')
+        if auto_run:
+            notes = 'Automated run.'
+        else:
+            notes = self._get_input('Press <Enter> to exit...\n')
         if notes:
             print('Notes: {}'.format(notes))
             print()
@@ -698,4 +715,7 @@ class CarbonCopy(object):
 
 if __name__ == '__main__':
     FTS = FarmduinoTestSuite()
-    FTS.run()
+    if len(sys.argv) == 1:
+        FTS.run()
+    elif sys.argv[1] == 'auto':
+        FTS.run(auto_run=True)

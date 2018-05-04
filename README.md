@@ -8,8 +8,25 @@ Requires [farmbot-arduino-firmware](https://github.com/FarmBot/farmbot-arduino-f
 
 ```
 pip install -r requirements.txt
+```
+
+## Run
+
+### Interactive
+
+```
 python electronics_test.py
 ```
+
+### Auto (using defaults)
+
+```
+python electronics_test.py auto
+```
+
+### Output
+
+Test results are available in the terminal and in `*_board-test-results.txt`.
 
 ## Test Suite Run Mode Options
 

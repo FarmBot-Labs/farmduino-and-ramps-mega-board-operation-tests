@@ -5,13 +5,14 @@
 from __future__ import print_function
 import sys
 import time
+import subprocess
 import serial
 import firmware_parameters
 
 HEADER = '''
 FarmBot electronics board test commands
 for Farmduino or RAMPS/MEGA
-v1.7
+v1.8
 
 Press <Enter> at prompts to use (default value)
 '''
@@ -106,7 +107,9 @@ class FarmduinoTestSuite(object):
                     EXPECTED_FIRMWARE_VERSION + '.F',
                     EXPECTED_FIRMWARE_VERSION + '.G']
                 break
+        sys.stdout.bold()
         print('{} selected.'.format(self.board_info['board']))
+        sys.stdout.reset_color()
 
     def connect_to_board(self):
         '''Connect to the board.'''
@@ -121,7 +124,9 @@ class FarmduinoTestSuite(object):
                     self.connection['port']))
             else:
                 time.sleep(2)
+                sys.stdout.bold()
                 print('Connected!', end='\n\n')
+                sys.stdout.reset_color()
                 break
         # Check for firmware
         response = ''
@@ -360,6 +365,8 @@ class FarmduinoTestSuite(object):
 
     def print_command_io(self, command_io, indent):
         '''Print sent/received for command.'''
+        result = command_io['result']
+        result_color = 'green' if result == 'PASS' else 'red'
         if command_io['result'] == 'FAIL' or self.options['verbose']:
             if command_io['expected'] is not None:
                 if (command_io['result'] == 'FAIL'
@@ -385,13 +392,17 @@ class FarmduinoTestSuite(object):
                 print('{}{:11}'.format(
                     indent,
                     '{:11}{}'.format('EXPECTED:', command_io['expected'])))
+                sys.stdout.change_color(result_color)
                 print('{}{:11}{}'.format(
-                    indent, 'RESULT:', command_io['result']))
+                    indent, 'RESULT:', result))
+                sys.stdout.reset_color()
                 print()
         elif not self.options['verbose']:
             if (command_io['result'] is not None
                     and command_io['received'] is not None):
+                sys.stdout.change_color(result_color)
                 print('{}{}'.format(indent, command_io['result']))
+                sys.stdout.reset_color()
 
     def skip(self, title=None):
         '''Skip test category if requested.'''
@@ -439,12 +450,14 @@ class FarmduinoTestSuite(object):
 
     def _reset_position(self):
         '''Reset position to home.'''
-        # print('resetting...')
+        print('resetting...', end='')
+        sys.stdout.flush()
         if USE_STM32_RESET and 'G' in self._get_board_code():
             self._encoder_hard_reset()
         else:
             self.send_command('F84 X1 Y1 Z1', quiet=True)
         self._wait_for_home()
+        print('reset complete.')
 
     def _wait_for_idle(self):
         '''Wait for an idle message.'''
@@ -502,15 +515,19 @@ class FarmduinoTestSuite(object):
                     text_direction = 'forward'
                 else:
                     text_direction = 'backward'
+                sys.stdout.bold()
                 print('Move {} axis {}:'.format(axis, text_direction))
+                sys.stdout.reset_color()
                 if self.skip():
                     continue
                 test_steps = [0, 0, 0]
                 test_steps[axis_num] = steps * direction
+                self._reset_position()
                 self.send_command('G00 X{} Y{} Z{}'.format(*test_steps),
                                   expected='X{} Y{} Z{}'.format(*test_steps),
                                   test_type='movement')
-                self._reset_position()
+                if '{}{}'.format(axis, direction) == 'Z-1':
+                    self._reset_position()  # post-test reset
 
     @time_test
     def test_pins(self):
@@ -644,9 +661,31 @@ class CarbonCopy(object):
         self.stdout.write(text)
         self.string += text
 
+    def _write_color_code(self, args):
+        '''Safely write color code.'''
+        try:
+            code = subprocess.check_output(args)
+        except subprocess.CalledProcessError:
+            pass
+        else:
+            self.stdout.write(code)
+
+    def change_color(self, color):
+        '''Change color of terminal output.'''
+        c_num = {'red': '1', 'green': '2'}
+        self._write_color_code(['tput', 'setaf', c_num[color]])
+
+    def bold(self):
+        '''Make output bold.'''
+        self._write_color_code(['tput', 'bold'])
+
+    def reset_color(self):
+        '''Reset color of terminal output.'''
+        self._write_color_code(['tput', 'sgr0'])
+
     def flush(self):
         '''Flush.'''
-        pass
+        self.stdout.flush()
 
     def append_newline(self):
         '''Add an extra newline for use after input prompts.'''
